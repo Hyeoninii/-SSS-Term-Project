@@ -10,4 +10,7 @@
 #define TA_TEEencrypt_CMD_DEC_VALUE		1
 #define TA_TEEencrypt_CMD_RANDOMKEY_GET		2
 #define TA_TEEencrypt_CMD_RANDOMKEY_ENC		3
+#define TA_TEEencrypt_CMD_RSA_KEY_GET		4
+#define TA_TEEencrypt_CMD_RSA_KEY_ENC		5
+
 #endif /*TA_TEEencrypt_H*/
