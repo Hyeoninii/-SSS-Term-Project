@@ -4,9 +4,15 @@
 #include <string.h>
 
 #define ROOT_KEY 5
+#define RSA_KEY_SIZE 2048
 
 static uint8_t random_key;
-static TEE_ObjectHandle rsa_keypair = TEE_HANDLE_NULL;
+
+struct rsa_session {
+    TEE_OperationHandle op_handle;  /* RSA operation handle */
+    TEE_ObjectHandle key_handle;    /* RSA key handle */
+};
+
 
 TEE_Result TA_CreateEntryPoint(void) {
 	DMSG("TA Create Entry Point has been called");
@@ -20,26 +26,37 @@ void TA_DestroyEntryPoint(void) {
 }
 
 //Session Management
-TEE_Result TA_OpenSessionEntryPoint(uint32_t param_types, TEE_Param __maybe_unused params[4], void __maybe_unused **sess_ctx)
-{
-	uint32_t exp_param_types = TEE_PARAM_TYPES(TEE_PARAM_TYPE_NONE, TEE_PARAM_TYPE_NONE, TEE_PARAM_TYPE_NONE, TEE_PARAM_TYPE_NONE);
-	if (param_types != exp_param_types)
-		return TEE_ERROR_BAD_PARAMETERS;
+TEE_Result TA_OpenSessionEntryPoint(uint32_t __unused param_types,
+                                    TEE_Param __unused params[4],
+                                    void **sess_ctx) {
+    struct rsa_session *sess = TEE_Malloc(sizeof(*sess), 0);
+    if (!sess)
+        return TEE_ERROR_OUT_OF_MEMORY;
 
-	IMSG("Session Created Successfully\n");
+    sess->key_handle = TEE_HANDLE_NULL;
+    sess->op_handle = TEE_HANDLE_NULL;
+    *sess_ctx = (void *)sess;
 
-	return TEE_SUCCESS;
+    IMSG("Session Created Successfully\n");
+    return TEE_SUCCESS;
 }
 
-void TA_CloseSessionEntryPoint(void __maybe_unused *sess_ctx)
-{
-	IMSG("Session Closed\n");
+void TA_CloseSessionEntryPoint(void *sess_ctx) {
+    struct rsa_session *sess = (struct rsa_session *)sess_ctx;
+
+    if (sess->key_handle != TEE_HANDLE_NULL)
+        TEE_FreeTransientObject(sess->key_handle);
+    if (sess->op_handle != TEE_HANDLE_NULL)
+        TEE_FreeOperation(sess->op_handle);
+
+    TEE_Free(sess);
+    IMSG("Session Closed\n");
 }
 
 //Caeser Cipher
 static TEE_Result generate_random_key()
 {
-    	TEE_GenerateRandom(&random_key, sizeof(random_key));
+    TEE_GenerateRandom(&random_key, sizeof(random_key));
 	random_key = (random_key % 25) + 1;
 	return TEE_SUCCESS;
 }
@@ -97,51 +114,28 @@ static TEE_Result decrypt_caeser(uint32_t param_types, TEE_Param params[4])
 }
 
 //RSA Cipher
-static TEE_Result generate_rsa_keypair()
-{
-    TEE_Result res;
-    res = TEE_AllocateTransientObject(TEE_TYPE_RSA_KEYPAIR, 2048, &rsa_keypair);
-    if (res != TEE_SUCCESS)
-        return res;
-
-    res = TEE_GenerateKey(rsa_keypair, 2048, NULL, 0);
-    return res;
+static TEE_Result create_rsa_keypair(struct rsa_session *sess) {
+    return TEE_AllocateTransientObject(TEE_TYPE_RSA_KEYPAIR, RSA_KEY_SIZE, &sess->key_handle) ||
+           TEE_GenerateKey(sess->key_handle, RSA_KEY_SIZE, NULL, 0);
 }
 
-static TEE_Result encrypt_rsa(uint32_t param_types, TEE_Param params[4])
-{
-    TEE_Result res;
-    char *plaintext = (char *)params[0].memref.buffer;
-    size_t plaintext_len = params[0].memref.size;
-    char ciphertext[256] = {0};
-    size_t ciphertext_len = sizeof(ciphertext);
+static TEE_Result encrypt_rsa(struct rsa_session *sess, uint32_t param_types, TEE_Param params[4]) {
+    void *plain = params[0].memref.buffer;
+    size_t plain_len = params[0].memref.size;
+    void *cipher = params[1].memref.buffer;
+    size_t cipher_len = params[1].memref.size;
 
-    TEE_OperationHandle op;
-    res = TEE_AllocateOperation(&op, TEE_ALG_RSAES_PKCS1_V1_5, TEE_MODE_ENCRYPT, 2048);
-    if (res != TEE_SUCCESS)
-        return res;
-
-    res = TEE_SetOperationKey(op, rsa_keypair);
-    if (res != TEE_SUCCESS)
-        return res;
-
-    res = TEE_AsymmetricEncrypt(op, NULL, 0, plaintext, plaintext_len, ciphertext, &ciphertext_len);
-    if (res != TEE_SUCCESS)
-        return res;
-
-    memcpy(params[0].memref.buffer, ciphertext, ciphertext_len);
-    params[0].memref.size = ciphertext_len;
-
-    TEE_FreeOperation(op);
-    return TEE_SUCCESS;
+    TEE_AllocateOperation(&sess->op_handle, TEE_ALG_RSAES_PKCS1_V1_5, TEE_MODE_ENCRYPT, RSA_KEY_SIZE);
+    TEE_SetOperationKey(sess->op_handle, sess->key_handle);
+    return TEE_AsymmetricEncrypt(sess->op_handle, NULL, 0, plain, plain_len, cipher, &cipher_len);
 }
 
 
 
-TEE_Result TA_InvokeCommandEntryPoint(void __maybe_unused *sess_ctx,
-                                      uint32_t cmd_id,
-                                      uint32_t param_types, TEE_Param params[4])
-{
+
+TEE_Result TA_InvokeCommandEntryPoint(void *sess_ctx, uint32_t cmd_id, uint32_t param_types, TEE_Param params[4]) {
+    struct rsa_session *sess = (struct rsa_session *)sess_ctx;
+
     switch (cmd_id) {
     case TA_TEEencrypt_CMD_RANDOMKEY_ENC:
         generate_random_key();
@@ -149,9 +143,15 @@ TEE_Result TA_InvokeCommandEntryPoint(void __maybe_unused *sess_ctx,
     case TA_TEEencrypt_CMD_RANDOMKEY_DEC:
         return decrypt_caeser(param_types, params);
     case TA_TEEencrypt_CMD_RSAKEY_ENC:
-        if (rsa_keypair == TEE_HANDLE_NULL)
-            generate_rsa_keypair();
-        return encrypt_rsa(param_types, params);
+        if (sess->key_handle == TEE_HANDLE_NULL) {
+            TEE_Result res = create_rsa_keypair(sess);
+            if (res != TEE_SUCCESS) {
+                EMSG("Failed to create RSA keypair: 0x%x", res);
+                return res;
+            }
+            DMSG("RSA keypair created successfully.");
+        }
+        return encrypt_rsa(sess, param_types, params);
     default:
         return TEE_ERROR_BAD_PARAMETERS;
     }
