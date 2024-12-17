@@ -6,9 +6,9 @@
 #include <TEEencrypt_ta.h>
 
 #define MAX_TEXT_LEN 1024
-#define RSA_BUFFER_SIZE 128
 
-//파일 읽기
+
+//파일 처리 관련 함수
 void read_file(const char *filename, char *buffer) {
     FILE *file = fopen(filename, "r");
     if (!file)
@@ -17,7 +17,6 @@ void read_file(const char *filename, char *buffer) {
     fclose(file);
 }
 
-//파일 쓰기
 void write_file(const char *filename, const char *data) {
     FILE *file = fopen(filename, "w");
     if (!file)
@@ -28,14 +27,8 @@ void write_file(const char *filename, const char *data) {
 
 
 int main(int argc, char *argv[]) {
-
-    //들어오는 인자가 올바르지 않을 경우
-    //argv[0]: ./TEEencrypt 
-    //argv[1]: -e or -d
-    //argv[2]: Text File
-    //argv[3]: Algorithm or Key File
     if (argc != 4) {
-        printf("Usage: TEEencrypt -e [plaintext file] [caesar or rsa] (encryption)\n");
+        printf("Usage: TEEencrypt -e [plaintext file] [caeser or rsa] (encryption)\n");
         printf("       TEEencrypt -d [ciphertext file] [key file] (decryption)\n");
         return 1;
     }
@@ -63,52 +56,32 @@ int main(int argc, char *argv[]) {
 
         read_file(argv[2], plaintext);
 
-        if (strcmp(argv[3], "caesar") == 0) {
-        printf("Using Caesar cipher for encryption...\n");
-            op.paramTypes = TEEC_PARAM_TYPES(TEEC_MEMREF_TEMP_INOUT, TEEC_VALUE_OUTPUT, TEEC_NONE, TEEC_NONE);
-            op.params[0].tmpref.buffer = plaintext;
-            op.params[0].tmpref.size = strlen(plaintext) + 1;
+        op.paramTypes = TEEC_PARAM_TYPES(TEEC_MEMREF_TEMP_INOUT, TEEC_VALUE_OUTPUT, TEEC_NONE, TEEC_NONE);
+        op.params[0].tmpref.buffer = plaintext;
+        op.params[0].tmpref.size = strlen(plaintext) + 1;
 
-            res = TEEC_InvokeCommand(&sess, TA_TEEencrypt_CMD_ENC_VALUE, &op, &err_origin);
-            if (res != TEEC_SUCCESS)
-                errx(1, "TEEC_InvokeCommand (encrypt) failed 0x%x origin 0x%x", res, err_origin);
+        if (strcmp(argv[3], "caeser") == 0) {
+            res = TEEC_InvokeCommand(&sess, TA_TEEencrypt_CMD_RANDOMKEY_ENC, &op, &err_origin);
+        } else if (strcmp(argv[3], "rsa") == 0) {
+            res = TEEC_InvokeCommand(&sess, TA_TEEencrypt_CMD_RSAKEY_ENC, &op, &err_origin);
+        } else {
+            printf("Wrong Algorithm. Use \"caeser\" or \"rsa\".\n");
+            return 1;
+        }
+
+        if (res != TEEC_SUCCESS)
+            errx(1, "TEEC_InvokeCommand (encrypt) failed 0x%x origin 0x%x", res, err_origin);
 
         snprintf(ciphertext, MAX_TEXT_LEN, "%s", (char *)op.params[0].tmpref.buffer);
         write_file("ciphertext.txt", ciphertext);
 
         char encrypted_key[16];
-            snprintf(encrypted_key, sizeof(encrypted_key), "%d", op.params[1].value.a);
-            write_file("encryptedkey.txt", encrypted_key);
+        snprintf(encrypted_key, sizeof(encrypted_key), "%d", op.params[1].value.a);
+        write_file("encryptedkey.txt", encrypted_key);
 
-            printf("Caesar Encryption complete. Output: ciphertext.txt, encryptedkey.txt\n");
-
-        } else if (strcmp(argv[3], "rsa") == 0) {
-            printf("Using RSA encryption...\n");
-            op.paramTypes = TEEC_PARAM_TYPES(TEEC_MEMREF_TEMP_INPUT, TEEC_MEMREF_TEMP_OUTPUT, TEEC_NONE, TEEC_NONE);
-            op.params[0].tmpref.buffer = plaintext;
-            op.params[0].tmpref.size = strlen(plaintext) + 1;
-
-            char rsa_ciphertext[RSA_BUFFER_SIZE] = {0};
-            op.params[1].tmpref.buffer = rsa_ciphertext;
-            op.params[1].tmpref.size = sizeof(rsa_ciphertext);
-
-            res = TEEC_InvokeCommand(&sess, TA_TEEencrypt_CMD_RSA_KEY_ENC, &op, &err_origin);
-            if (res != TEEC_SUCCESS)
-                errx(1, "TEEC_InvokeCommand (RSA encrypt) failed 0x%x origin 0x%x", res, err_origin);
-
-            write_file("ciphertext_rsa.txt", rsa_ciphertext);
-            printf("RSA Encryption complete. Output: ciphertext_rsa.txt\n");
-
-        } else {
-            printf("Invalid algorithm. Use 'caesar' or 'rsa'.\n");
-            return 1;
-        }
+        printf("Encryption complete. Output: ciphertext.txt, encryptedkey.txt\n");
 
     } else if (strcmp(argv[1], "-d") == 0) {
-        if (argc != 4) {
-            printf("Decryption requires both ciphertext and key files.\n");
-            return 1;
-        }
 
         char ciphertext[MAX_TEXT_LEN] = {0};
         char plaintext[MAX_TEXT_LEN] = {0};
@@ -126,7 +99,7 @@ int main(int argc, char *argv[]) {
         op.params[0].tmpref.size = strlen(ciphertext) + 1;
         op.params[1].value.a = encrypted_key;
 
-        res = TEEC_InvokeCommand(&sess, TA_TEEencrypt_CMD_DEC_VALUE, &op, &err_origin);
+        res = TEEC_InvokeCommand(&sess, TA_TEEencrypt_CMD_RANDOMKEY_DEC, &op, &err_origin);
         if (res != TEEC_SUCCESS)
             errx(1, "TEEC_InvokeCommand (decrypt) failed 0x%x origin 0x%x", res, err_origin);
 
@@ -134,11 +107,12 @@ int main(int argc, char *argv[]) {
         write_file("plaintext.txt", plaintext);
 
         printf("Decryption complete. Output: plaintext.txt\n");
-        } else {
-            printf("Invalid option. Use -e (encryption) or -d (decryption).\n");
-        }
 
-        TEEC_CloseSession(&sess);
-        TEEC_FinalizeContext(&ctx);
-        return 0;
+    } else {
+        printf("Invalid option. Use -e (encryption) or -d (decryption).\n");
+    }
+
+    TEEC_CloseSession(&sess);
+    TEEC_FinalizeContext(&ctx);
+    return 0;
 }
