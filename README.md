@@ -1,1 +1,4 @@
-# -SSS-Term-Project
+# 소프트웨어 및 시스템보안 텀프로젝트
+TEE에서 동작하는 CA, TA구현
+- CAESER 암호화/복호화 방식
+- RSA 암호화
