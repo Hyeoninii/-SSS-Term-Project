@@ -9,8 +9,8 @@
 static uint8_t random_key;
 
 struct rsa_session {
-    TEE_OperationHandle op_handle;  /* RSA operation handle */
-    TEE_ObjectHandle key_handle;    /* RSA key handle */
+    TEE_OperationHandle op_handle; 
+    TEE_ObjectHandle key_handle;  
 };
 
 
@@ -23,7 +23,6 @@ void TA_DestroyEntryPoint(void) {
 	DMSG("TA Destroy Entry Point has been called");
 }
 
-//Session Management
 TEE_Result TA_OpenSessionEntryPoint(uint32_t __unused param_types,
                                     TEE_Param __unused params[4],
                                     void **sess_ctx) {
@@ -123,35 +122,34 @@ static TEE_Result encrypt_rsa(struct rsa_session *sess, uint32_t __unused param_
     size_t plain_len = params[0].memref.size;
     void *cipher = params[1].memref.buffer;
     uint32_t cipher_len = params[1].memref.size;
+    
     if (!plain || plain_len == 0 || !cipher || cipher_len < (RSA_KEY_SIZE / 8)) {
         EMSG("Invalid buffer sizes: plain_len=%zu, cipher_len=%u", plain_len, cipher_len);
         return TEE_ERROR_BAD_PARAMETERS;
     }
-
     res = TEE_AllocateOperation(&sess->op_handle, TEE_ALG_RSAES_PKCS1_V1_5, TEE_MODE_ENCRYPT, RSA_KEY_SIZE);
     if (res != TEE_SUCCESS) {
         EMSG("Failed to allocate RSA operation: 0x%x", res);
         return res;
     }
-
     res = TEE_SetOperationKey(sess->op_handle, sess->key_handle);
     if (res != TEE_SUCCESS) {
         EMSG("Failed to set RSA key: 0x%x", res);
         TEE_FreeOperation(sess->op_handle);
         return res;
     }
-
     res = TEE_AsymmetricEncrypt(sess->op_handle, NULL, 0, plain, plain_len, cipher, &cipher_len);
     if (res != TEE_SUCCESS) {
         EMSG("RSA encryption failed: 0x%x", res);
     } else {
-        params[1].memref.size = cipher_len; 
+        params[1].memref.size = cipher_len;
         DMSG("RSA encryption successful, encrypted length: %u", cipher_len);
     }
 
     TEE_FreeOperation(sess->op_handle);
     return res;
 }
+
 TEE_Result TA_InvokeCommandEntryPoint(void *sess_ctx, uint32_t cmd_id, uint32_t param_types, TEE_Param params[4]) {
     struct rsa_session *sess = (struct rsa_session *)sess_ctx;
 
